@@ -38,9 +38,11 @@ type RawOpenAPI struct {
 func (p *OpenAPI3) Parse(specRef string) (*spec.ParsedSpec, error) {
 	var body []byte
 	var err error
+	var specURL *url.URL
 
 	if u, parseErr := url.ParseRequestURI(specRef); parseErr == nil && (u.Scheme == "http" || u.Scheme == "https") {
 		// It's a URL
+		specURL = u
 		resp, err := http.Get(specRef)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch spec: %w", err)
@@ -71,7 +73,14 @@ func (p *OpenAPI3) Parse(specRef string) (*spec.ParsedSpec, error) {
 	// Determine base URL
 	baseURL := ""
 	if len(raw.Servers) > 0 {
-		baseURL = raw.Servers[0].URL
+		serverURL := raw.Servers[0].URL
+		// Check if server URL is relative (starts with /)
+		if strings.HasPrefix(serverURL, "/") && specURL != nil {
+			// Resolve relative server URL against the spec URL's host
+			baseURL = specURL.Scheme + "://" + specURL.Host + serverURL
+		} else {
+			baseURL = serverURL
+		}
 	}
 
 	parsed := &spec.ParsedSpec{

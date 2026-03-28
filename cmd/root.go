@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"aurl/internal/client"
 	"aurl/internal/config"
 	"aurl/internal/parser"
 	"aurl/internal/spec"
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -22,6 +24,7 @@ into simple CLI commands. Register an API once, then call endpoints like:
   aurl linear '{ viewer { name } }'`,
 	Args:             validateArgs,
 	TraverseChildren: true,
+	RunE:             runRoot,
 }
 
 func init() {
@@ -63,6 +66,91 @@ func validateArgs(cmd *cobra.Command, args []string) error {
 	printAPIHelpFromSpec(name, api.BaseURL, openAPI)
 	os.Exit(0)
 	return nil
+}
+
+func runRoot(cmd *cobra.Command, args []string) error {
+	// Handle "aurl <name> <method> <path>" pattern
+	if len(args) >= 3 {
+		name := args[0]
+		method := strings.ToUpper(args[1])
+		path := args[2]
+		body := ""
+
+		// If there's a 4th argument, it's the request body
+		if len(args) > 3 {
+			body = args[3]
+		}
+
+		// Validate HTTP method
+		validMethods := map[string]bool{
+			"GET": true, "POST": true, "PUT": true, "DELETE": true,
+			"PATCH": true, "OPTIONS": true, "HEAD": true,
+		}
+		if !validMethods[method] {
+			return fmt.Errorf("invalid HTTP method: %s", method)
+		}
+
+		// Load config
+		cfg, err := config.Load()
+		if err != nil {
+			return fmt.Errorf("failed to load config: %w", err)
+		}
+
+		// Get the API config
+		api, ok := cfg.GetAPI(name)
+		if !ok {
+			return fmt.Errorf("API %q is not registered. Run 'aurl add %s <spec>' to register it", name, name)
+		}
+
+		// Parse the spec to get base URL
+		p := parser.NewOpenAPI3()
+		openAPI, err := p.Parse(api.SpecURL)
+		if err != nil {
+			return fmt.Errorf("failed to parse spec for %s: %w", name, err)
+		}
+
+		// Determine base URL
+		baseURL := api.BaseURL
+		if baseURL == "" {
+			baseURL = openAPI.BaseURL
+		}
+		if baseURL == "" {
+			return fmt.Errorf("no base URL found for API %q", name)
+		}
+
+		// Build the full URL
+		fullURL := client.BuildURL(baseURL, path)
+
+		// Create HTTP client
+		httpClient := client.NewHTTPClient()
+
+		// Build request
+		req := client.Request{
+			Method: method,
+			URL:    fullURL,
+			Body:   body,
+			Header: make(map[string]string),
+		}
+
+		// Add auth header if configured
+		if api.Auth.Type == "bearer" && api.Auth.Header != "" {
+			req.Header[api.Auth.Header] = api.Auth.Value
+		} else if api.Auth.Type == "api_key" && api.Auth.Header != "" {
+			req.Header[api.Auth.Header] = api.Auth.Value
+		}
+
+		// Execute the request
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("request failed: %w", err)
+		}
+
+		// Print response
+		fmt.Fprintf(os.Stdout, "%s\n", resp.Body)
+		return nil
+	}
+
+	return fmt.Errorf("unknown command. Use 'aurl --help' for usage")
 }
 
 func Execute() {
