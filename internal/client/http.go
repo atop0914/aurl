@@ -37,17 +37,23 @@ type Response struct {
 
 // Do executes an HTTP request and returns the response
 func (c *HTTPClient) Do(req Request) (*Response, error) {
-	// Parse the URL
+	// Parse the URL to extract query parameters
 	parsedURL, err := url.ParseRequestURI(req.URL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %w", err)
 	}
 
-	// Build the full URL with path
+	// Build the full URL
 	fullURL := parsedURL.String()
 
+	// Determine body reader
+	var bodyReader io.Reader
+	if req.Body != "" {
+		bodyReader = strings.NewReader(req.Body)
+	}
+
 	// Create the HTTP request
-	httpReq, err := http.NewRequest(req.Method, fullURL, nil)
+	httpReq, err := http.NewRequest(req.Method, fullURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -55,6 +61,13 @@ func (c *HTTPClient) Do(req Request) (*Response, error) {
 	// Add headers
 	for key, value := range req.Header {
 		httpReq.Header.Set(key, value)
+	}
+
+	// Set Content-Type for requests with body
+	if req.Body != "" {
+		if httpReq.Header.Get("Content-Type") == "" {
+			httpReq.Header.Set("Content-Type", "application/json")
+		}
 	}
 
 	// Execute the request
@@ -77,9 +90,51 @@ func (c *HTTPClient) Do(req Request) (*Response, error) {
 	}, nil
 }
 
+// ParseURL extracts path and query parameters from a URL string
+func ParseURL(rawURL string) (path string, queryParams url.Values) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL, url.Values{}
+	}
+	return parsed.Path, parsed.Query()
+}
+
 // BuildURL constructs a full URL from baseURL and path
+// If path contains query parameters, they are preserved
 func BuildURL(baseURL, path string) string {
+	// Check if path has query parameters
+	if strings.Contains(path, "?") {
+		// Parse the path to extract query
+		parsed, err := url.Parse(path)
+		if err == nil {
+			// Build base + path + query
+			baseURL = strings.TrimSuffix(baseURL, "/")
+			path = strings.TrimPrefix(parsed.Path, "/")
+			result := baseURL + "/" + path
+			if parsed.RawQuery != "" {
+				result += "?" + parsed.RawQuery
+			}
+			return result
+		}
+	}
+
+	// Simple case: no query params
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	path = strings.TrimPrefix(path, "/")
 	return baseURL + "/" + path
+}
+
+// AddQueryParams adds query parameters to a URL string
+func AddQueryParams(rawURL string, params map[string]string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return rawURL
+	}
+
+	query := parsed.Query()
+	for key, value := range params {
+		query.Set(key, value)
+	}
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }

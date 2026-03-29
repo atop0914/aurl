@@ -12,13 +12,16 @@ import (
 )
 
 var callCmd = &cobra.Command{
-	Use:   "call [api-name] [method] [path]",
+	Use:   "call [api-name] [method] [path] [body]",
 	Short: "Make an HTTP request to a registered API",
 	Long: `Make an HTTP request to a registered API endpoint.
-Example:
+Examples:
   aurl petstore GET /pet/1
-  aurl petstore POST /pet '{"name":"dog"}'`,
-	Args: cobra.ExactArgs(3),
+  aurl petstore POST /pet '{"name":"dog"}'
+  aurl petstore GET '/pet/findByStatus?status=available'
+  aurl petstore PUT /pet '{"id":1,"name":"dog"}'
+  aurl petstore DELETE /pet/1`,
+	Args: cobra.RangeArgs(3, 4),
 	RunE: runCall,
 }
 
@@ -35,6 +38,18 @@ func runCall(cmd *cobra.Command, args []string) error {
 	// If there's a 4th argument, it's the request body
 	if len(args) > 3 {
 		body = args[3]
+	}
+
+	// Validate method
+	validMethods := map[string]bool{
+		"GET":    true,
+		"POST":   true,
+		"PUT":    true,
+		"PATCH":  true,
+		"DELETE": true,
+	}
+	if !validMethods[method] {
+		return fmt.Errorf("invalid method %q. Supported: GET, POST, PUT, PATCH, DELETE", method)
 	}
 
 	// Load config
@@ -65,7 +80,7 @@ func runCall(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no base URL found for API %q", name)
 	}
 
-	// Build the full URL
+	// Build the full URL (handles query params in path)
 	fullURL := client.BuildURL(baseURL, path)
 
 	// Create HTTP client
