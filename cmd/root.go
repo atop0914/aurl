@@ -5,6 +5,7 @@ import (
 	"aurl/internal/config"
 	"aurl/internal/parser"
 	"aurl/internal/spec"
+	"aurl/internal/validator"
 	"fmt"
 	"os"
 	"sort"
@@ -121,6 +122,22 @@ func runRoot(cmd *cobra.Command, args []string) error {
 		// Build the full URL
 		fullURL := client.BuildURL(baseURL, path)
 
+		// Extract params for validation
+		_, queryParams, _ := validator.ExtractParamsFromURL(fullURL)
+
+		// Find endpoint for validation — use path without query params
+		pathOnly := strings.SplitN(path, "?", 2)[0]
+		endpoint := p.FindEndpoint(openAPI, method, pathOnly)
+		if endpoint != nil {
+			reqVal := &validator.RequestValidation{
+				QueryParams:  queryParams,
+				HeaderParams: make(map[string]string),
+			}
+			if err := validator.ValidateEndpoint(endpoint, reqVal); err != nil {
+				return fmt.Errorf("validation failed: %w", err)
+			}
+		}
+
 		// Create HTTP client
 		httpClient := client.NewHTTPClient()
 
@@ -132,11 +149,20 @@ func runRoot(cmd *cobra.Command, args []string) error {
 			Header: make(map[string]string),
 		}
 
-		// Add auth header if configured
-		if api.Auth.Type == "bearer" && api.Auth.Header != "" {
-			req.Header[api.Auth.Header] = api.Auth.Value
-		} else if api.Auth.Type == "api_key" && api.Auth.Header != "" {
-			req.Header[api.Auth.Header] = api.Auth.Value
+		// Inject auth — explicit config first, then auto-detect from spec
+		if api.Auth.Type != "none" && api.Auth.Header != "" {
+			if api.Auth.Type == "bearer" || api.Auth.Type == "api_key" {
+				req.Header[api.Auth.Header] = api.Auth.Value
+			}
+		} else {
+			// Auto-detect auth from spec
+			if endpoint != nil {
+				h, v, t := validator.AutoDetectAuth(endpoint, openAPI.SecuritySchemes)
+				if h != "" && v != "" {
+					req.Header[h] = v
+					_ = t
+				}
+			}
 		}
 
 		// Execute the request
